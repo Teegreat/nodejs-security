@@ -7,7 +7,6 @@ import {
   requireCsrf,
   setAuthCookies,
 } from "../utils/cookie.js";
-import { use } from "passport";
 import { requireAccessAuth, requiredRole } from "../middleware/auth.js";
 import { AuthenticatedRequest, AuthTokenPayload } from "../utils/types.js";
 import {
