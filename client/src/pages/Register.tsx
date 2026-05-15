@@ -1,9 +1,6 @@
 import { useState } from "react";
-import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import api from "../api";
-
-const API_URL = import.meta.env.VITE_API_URL;
 
 export default function Register() {
   const navigate = useNavigate();

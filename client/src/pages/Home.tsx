@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
 import api from "../api";
-
-const API_URL = import.meta.env.VITE_API_URL;
 
 type User = {
   _id?: string;
@@ -42,7 +39,7 @@ export default function Home() {
 
   async function handleFetchAllUsers() {
     try {
-      const res = await api.get("auth/users");
+      const res = await api.get("/auth/users");
       setUsers(res.data.users);
       setMessage("Users fetched successfully");
     } catch (err) {
@@ -64,6 +61,16 @@ export default function Home() {
 
           <h3>Admin test</h3>
           <button onClick={handleFetchAllUsers}>Admin check</button>
+
+          {users.length > 0 && (
+            <ul>
+              {users.map((item) => (
+                <li key={item._id ?? item.id ?? item.email}>
+                  {item.name} ({item.email}) - {item.role}
+                </li>
+              ))}
+            </ul>
+          )}
 
           <button onClick={logout}>Logout</button>
         </div>
