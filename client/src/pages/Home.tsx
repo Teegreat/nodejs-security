@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
+import api from "../api";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -14,26 +15,41 @@ type User = {
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [message, setMessage] = useState("");
+  const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-
-    if (!token) return;
-
-    axios
-      .get(`${API_URL}/auth/me`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-      .then((res) => setUser(res.data))
-      .catch(() => setUser(null));
+    async function loadme() {
+      try {
+        const res = await api.get("/auth/me");
+        setUser(res.data);
+      } catch (error) {
+        setUser(null);
+      }
+    }
+    loadme();
   }, []);
 
-  function logout() {
-    localStorage.removeItem("token");
-    setUser(null);
-    setMessage("Logged out on client only");
+  async function logout() {
+    try {
+      await api.post("/auth/logout");
+      setUser(null);
+      setUsers([]);
+      setMessage("logout success");
+    } catch (error) {
+      setMessage("logout failed");
+    }
+  }
+
+  async function handleFetchAllUsers() {
+    try {
+      const res = await api.get("auth/users");
+      setUsers(res.data.users);
+      setMessage("Users fetched successfully");
+    } catch (err) {
+      setUsers([]);
+      setMessage("Failed to fetch users");
+      console.error(err);
+    }
   }
 
   return (
@@ -45,6 +61,10 @@ export default function Home() {
           <p>Logged in as: {user.name}</p>
           <p>Email: {user.email}</p>
           <p>Role: {user.role}</p>
+
+          <h3>Admin test</h3>
+          <button onClick={handleFetchAllUsers}>Admin check</button>
+
           <button onClick={logout}>Logout</button>
         </div>
       ) : (

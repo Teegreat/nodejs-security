@@ -1,11 +1,33 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User.js";
+import bcrypt from "bcrypt";
+import {
+  clearAuthCookies,
+  requireCsrf,
+  setAuthCookies,
+} from "../utils/cookie.js";
+import { use } from "passport";
+import { requireAccessAuth, requiredRole } from "../middleware/auth.js";
+import { AuthenticatedRequest, AuthTokenPayload } from "../utils/types.js";
+import {
+  clearFailedLoginAttempts,
+  isAccLocked,
+  registerFailedLoginAttempt,
+  validateBody,
+} from "../utils/helpers.js";
+import {
+  listUsersQuerySchema,
+  loginSchema,
+  registerSchema,
+} from "../schema.js";
 
 const router = express.Router();
 
+const EXTRACT_SAFE_USER_SELECT_OPTIONS = "-password";
+
 // POST /api/auth/register
-router.post("/register", async (req, res) => {
+router.post("/register", validateBody(registerSchema), async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
@@ -15,10 +37,12 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "User already exists" });
     }
 
+    const hashPassword = await bcrypt.hash(password, 10);
+
     const user = await User.create({
       name,
       email,
-      password,
+      password: hashPassword,
     });
 
     res.status(201).json({
@@ -39,32 +63,46 @@ router.post("/register", async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post("/login", async (req, res) => {
+router.post("/login", validateBody(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // INTENTIONALLY INSECURE:
-    // Plain query with raw email and raw password comparison.
-    const user = await User.findOne({ email, password });
+    const user = await User.findOne({ email });
 
     if (!user) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const token = jwt.sign(
-      {
-        userId: user._id,
-        role: user.role,
-      },
-      process.env.JWT_SECRET || "supersecretkey",
-      {
-        expiresIn: "7d",
-      },
-    );
+    // check if account is locked
+    if (isAccLocked(user)) {
+      return res.status(429).json({
+        message: "Too many login attempts. Please try again later",
+      });
+    }
+
+    const checkPassword = await bcrypt.compare(password, user.password);
+
+    if (!checkPassword) {
+      await registerFailedLoginAttempt(user);
+
+      if (isAccLocked(user)) {
+        return res.status(429).json({
+          message: "Too many login attempts. Please try again later",
+        });
+      }
+
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
+    }
+
+    await clearFailedLoginAttempts(user);
+
+    // set auth cookies
+    setAuthCookies(res, String(user._id), user.role);
 
     res.json({
       message: "Login success",
-      token,
       user: {
         id: user._id,
         name: user.name,
@@ -81,28 +119,19 @@ router.post("/login", async (req, res) => {
 });
 
 // GET /api/auth/me
-router.get("/me", async (req, res) => {
+router.get("/me", requireAccessAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader?.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "No token" });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || "supersecretkey",
-    ) as { userId: string; role: string };
-
-    const user = await User.findById(decoded.userId).select("-password");
+    const user = await User.findById(req.authUser?.userId).select(
+      EXTRACT_SAFE_USER_SELECT_OPTIONS,
+    );
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      res.status(404).json({
+        message: "User not found",
+      });
     }
 
-    res.json(user);
+    return res.json(user);
   } catch (error) {
     res.status(401).json({
       message: "Unauthorized",
@@ -110,5 +139,84 @@ router.get("/me", async (req, res) => {
     });
   }
 });
+
+router.post("/refresh", requireCsrf, async (req, res) => {
+  try {
+    const refreshToken = req.cookies?.["refresh_token"];
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        message: "No refresh token",
+      });
+    }
+
+    const decodedUserInfo = jwt.verify(
+      refreshToken,
+      process.env.REFRESH_TOKEN_SECRET!,
+    ) as AuthTokenPayload;
+
+    if (decodedUserInfo.type !== "refresh") {
+      return res.status(401).json({
+        message: "Invalid refresh token",
+      });
+    }
+
+    setAuthCookies(res, decodedUserInfo.userId, decodedUserInfo.role);
+
+    return res.json({
+      message: "Token refreshed",
+    });
+  } catch (error) {
+    return res.status(401).json({
+      message: "Refresh failed",
+    });
+  }
+});
+
+router.post("/logout", requireCsrf, (_req, res) => {
+  clearAuthCookies(res);
+  return res.json({ message: "Logout success" });
+});
+
+router.get(
+  "/users",
+  requireAccessAuth,
+  requiredRole("admin"),
+  async (req, res) => {
+    try {
+      const pasrsedQuery = listUsersQuerySchema.safeParse(req.query);
+
+      if (!pasrsedQuery.success) {
+        return res.status(400).json({
+          message: "Invalid query filters",
+        });
+      }
+
+      const filters: Record<string, string> = {};
+
+      if (pasrsedQuery.data.role) {
+        filters.role = pasrsedQuery.data.role;
+      }
+
+      if (pasrsedQuery.data.name) {
+        filters.name = pasrsedQuery.data.name;
+      }
+
+      if (pasrsedQuery.data.email) {
+        filters.email = pasrsedQuery.data.email;
+      }
+
+      const extractUsersList = await User.find(filters).select(
+        EXTRACT_SAFE_USER_SELECT_OPTIONS,
+      );
+
+      return res.json({ users: extractUsersList });
+    } catch (error) {
+      return res.status(500).json({
+        message: "Failed to fetch users list",
+      });
+    }
+  },
+);
 
 export default router;

@@ -3,16 +3,56 @@ import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
 import authRoutes from "./routes/auth.js";
+import cookieParser from "cookie-parser";
+import rateLimit from "express-rate-limit";
+import helmet from "helmet";
 
 dotenv.config();
 
 const app = express();
 
-app.use(cors());
+app.disable("x-powered-by");
 
-// INTENTIONALLY SIMPLE / INSECURE:
-// open JSON parsing with no limits yet
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many requests, please try again later.",
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many auth attempts, please try again later.",
+});
+
+app.use(helmet());
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (process.env.CORS_ALLOWED_ORIGINS?.includes(origin)) {
+        return callback(null, true);
+      }
+    },
+    credentials: true,
+  }),
+);
+
+app.use(cookieParser());
 app.use(express.json());
+
+app.use("/api", apiLimiter);
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/refresh", authLimiter);
 
 app.get("/api/health", (_req, res) => {
   res.json({

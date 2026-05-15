@@ -1,6 +1,7 @@
 import { useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import api from "../api";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -16,7 +17,7 @@ export default function Register() {
     e.preventDefault();
 
     try {
-      await axios.post(`${API_URL}/auth/register`, {
+      await api.post("/auth/register", {
         name,
         email,
         password,
